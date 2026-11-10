@@ -13,6 +13,10 @@ jobs:
   build:
     name: Build macOS app (${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
+    env:
+      # Keep any compilation performed during the build compatible with old macOS.
+      # arm64 cannot target anything older than 11.0.
+      MACOSX_DEPLOYMENT_TARGET: ${{ matrix.arch == 'arm64' && '11.0' || '10.13' }}
     strategy:
       fail-fast: false
       matrix:
@@ -20,9 +24,11 @@ jobs:
           # arm64 (Apple Silicon)
           - runner: macos-15
             arch: arm64
+            pyi_arch: arm64
           # x86_64 (Intel); macos-13 was retired on 2025-12-04
           - runner: macos-15-intel
             arch: x86_64
+            pyi_arch: x86_64
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -48,19 +54,37 @@ jobs:
             --icon "icon.icns" \
             --add-data "icon.png:." \
             --osx-bundle-identifier "com.run.airtype" \
+            --target-arch "${{ matrix.pyi_arch }}" \
             src/remote_server.py
+
+      - name: Write bundle version
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION="dev-${GITHUB_SHA::7}"
+          fi
+          if echo "${VERSION}" | grep -Eq '^[0-9]+(\.[0-9]+)*$'; then
+            BUNDLE_VERSION="${VERSION}"
+          else
+            BUNDLE_VERSION="0.0.0"
+          fi
+          PLIST="dist/AirType.app/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${BUNDLE_VERSION}" "${PLIST}" \
+            || /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string ${BUNDLE_VERSION}" "${PLIST}"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${BUNDLE_VERSION}" "${PLIST}" \
+            || /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string ${BUNDLE_VERSION}" "${PLIST}"
+          echo "APP_VERSION=${VERSION}" >> "${GITHUB_ENV}"
+
+      - name: Verify macOS 12 compatibility
+        run: ./scripts/verify_bundle.sh dist/AirType.app "${{ matrix.arch }}" 12.0
 
       - name: Ad-hoc codesign
         run: codesign --deep --force --verbose --sign "-" dist/AirType.app
 
       - name: Package
         run: |
-          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
-            VERSION="${GITHUB_REF_NAME}"
-          else
-            VERSION="dev-${GITHUB_SHA::7}"
-          fi
-          NAME="AirType-${VERSION}-${{ matrix.arch }}"
+          NAME="AirType-${APP_VERSION}-${{ matrix.arch }}"
           ditto -c -k --sequesterRsrc --keepParent dist/AirType.app "${NAME}.zip"
           shasum -a 256 "${NAME}.zip" > "${NAME}.zip.sha256"
 
@@ -94,3 +118,18 @@ jobs:
           generate_release_notes: true
           draft: false
           prerelease: false
+          body: |
+            macOS 12 (Monterey) 及以上可用。每个压缩包附有对应的 .sha256 校验文件。
+
+            | 文件 | 架构 | 适用机型 |
+            | --- | --- | --- |
+            | AirType-*-x86_64.zip | x86_64 | Intel Mac |
+            | AirType-*-arm64.zip | arm64 | Apple Silicon (M 系列) |
+
+            应用使用 ad-hoc 签名，未经过 Apple 公证。首次打开请在 Finder 中右键点击 App 选择“打开”，或执行：
+
+            ```
+            xattr -d com.apple.quarantine /Applications/AirType.app
+            ```
+
+            首次使用还需在「系统设置 - 隐私与安全性 - 辅助功能」中允许 AirType，否则文字不会粘贴到目标窗口。

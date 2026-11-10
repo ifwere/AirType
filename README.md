@@ -15,13 +15,26 @@
 
 | 项目 | 要求 |
 |------|------|
-| 系统 | macOS（源码理论上兼容 Windows/Linux，但打包脚本只覆盖 macOS） |
+| 系统 | macOS 12 Monterey 及以上（Intel 为主要验证目标，同时发布 arm64 版本）；源码理论上兼容 Windows/Linux，但打包脚本只覆盖 macOS |
 | Python | 3.13（`build.sh` 中固定使用 `python3.13`） |
 | 图形库 | tkinter（python.org 官方安装包自带） |
 
 ### macOS 权限
 
 AirType 通过 PyAutoGUI 模拟键盘，首次运行需要在「系统设置 -> 隐私与安全性 -> 辅助功能」中允许 AirType（开发运行时为终端或 IDE），否则文字会进入剪贴板但不会粘贴。部分系统还需要授予「屏幕录制」权限。
+
+### 最低系统版本
+
+`scripts/verify_bundle.sh` 会检查产物内每个 Mach-O 文件的目标架构和最低系统版本，CI 与 `build.sh` 都会调用它。发布标准是 x86_64 架构、最低系统版本不超过 12.0。
+
+需要注意 Python 来源不同会改变产物要求：
+
+| Python 来源 | framework 最低版本 | 产物可运行的最低 macOS |
+|-------------|--------------------|------------------------|
+| python.org 安装包（CI 使用） | 10.13 | 10.13，覆盖 macOS 12 |
+| Homebrew python@3.13 | 12.0 | 12.0，仅保证 macOS 12 及以上 |
+
+因此本地用 Homebrew Python 打的包不要宣称支持 macOS 12 以下。
 
 ## 快速开始
 
@@ -40,9 +53,17 @@ python src/remote_server.py
 
 ```bash
 ./build.sh
+
+# 可选环境变量
+SKIP_PIP=1 ./build.sh        # 跳过依赖安装
+PYTHON=python3 ./build.sh    # 指定解释器
+VERSION=1.2.3 ./build.sh     # 指定写入 Info.plist 的版本号
+ARCH=arm64 ./build.sh        # 指定目标架构，默认 x86_64
 ```
 
-产物位于 `dist/AirType.app`。脚本会重新生成图标、清理旧的 `build/` `dist/` 和 `AirType.spec`，再调用 PyInstaller 生成 .app。
+产物位于 `dist/AirType.app`。脚本会安装依赖、重新生成图标、清理旧的 `build/` `dist/` 和 `AirType.spec`、调用 PyInstaller 生成 .app、写入 `CFBundleShortVersionString` 与 `CFBundleVersion`、做 ad-hoc 签名，最后运行 `scripts/verify_bundle.sh` 检查架构与最低系统版本。
+
+脚本只使用 macOS 12 自带 bash 3.2 支持的语法，不使用 bash 4 的关联数组或大小写转换。
 
 ## 使用
 
@@ -65,12 +86,14 @@ python src/remote_server.py
 | `src/remote_server.py` | 主程序：Flask 服务、tkinter 界面、二维码生成 |
 | `src/generate_icon.py` | 用 Pillow 绘制图标，macOS 下生成 `.icns` |
 | `build.sh` | 本地 macOS 打包脚本 |
+| `scripts/verify_bundle.sh` | 校验产物的架构与最低 macOS 版本 |
 | `.github/workflows/build-release.yml` | CI：构建 arm64 / x86_64 安装包并发布 Release |
 | `requirements.txt` | 直接依赖清单 |
+| `LICENSE` | MIT 许可证 |
 
 ## 发布流程
 
-推送 `v*` 形式的 tag 后，GitHub Actions 会分别在 `macos-15`（arm64）与 `macos-15-intel`（x86_64）上打包，做 ad-hoc 签名，生成 `AirType-<tag>-<arch>.zip` 及其 SHA256，并自动创建 Release。也可以手动触发 workflow，此时产物只作为 artifact 保留。
+推送 `v*` 形式的 tag 后，GitHub Actions 会分别在 `macos-15`（arm64）与 `macos-15-intel`（x86_64）上打包。两个 job 都会用 `--target-arch` 固定架构，并在签名前运行 `scripts/verify_bundle.sh`，确认产物内所有 Mach-O 文件的架构正确、最低系统版本不超过 12.0；检查不通过时 job 直接失败，不会产出 Release。随后生成 `AirType-<version>-<arch>.zip` 及其 SHA256，并自动创建 Release。也可以手动触发 workflow，此时产物只作为 artifact 保留。
 
 下载的 app 未使用开发者证书签名，首次打开需右键选择「打开」，或执行：
 
@@ -91,3 +114,7 @@ xattr -d com.apple.quarantine /Applications/AirType.app
 | 提示端口被占用 | 界面中手动修改端口后重新启动 |
 | 文字进了剪贴板但没粘贴 | 检查辅助功能权限；确认焦点在目标输入框上 |
 | 启动后窗口消失 | 设计如此，点击 Dock 图标可重新显示 |
+
+## 许可证
+
+MIT，见 [LICENSE](LICENSE)。

@@ -320,7 +320,7 @@ class ServerThread(threading.Thread):
 
     def run(self):
         try:
-            self.server = make_server(self.host, self.port, self.app)
+            self.server = make_server(self.host, self.port, self.app, threaded=True)
             self.server.serve_forever()
         except Exception as e:
             self.error = e
@@ -338,28 +338,32 @@ def index():
 def type_text():
     # [修改] 4. 注释掉 Token 相关的全局变量引用
     # global CURRENT_TOKEN
-    data = request.get_json()
+    data = request.get_json(silent=True)
     
     # [修改] 5. 注释掉后端鉴权检查逻辑
     # token = data.get('token', '')
     # if not token or token != CURRENT_TOKEN:
     #     return {'success': False, 'message': '验证失败，请重新扫码'}, 403
 
+    if not isinstance(data, dict):
+        return {'success': False, 'message': '请求格式错误'}, 400
+
+    text = data.get('text', '')
+    if not isinstance(text, str) or not text:
+        return {'success': False, 'message': '内容为空'}, 400
+
     try:
-        text = data.get('text', '')
-        if text:
-            pyperclip.copy(text)
-            time.sleep(0.3) 
-            pyautogui.keyDown(PASTE_KEY)
-            time.sleep(0.1)
-            pyautogui.press('v')
-            time.sleep(0.1)
-            pyautogui.keyUp(PASTE_KEY)
-            return {'success': True}
-    except Exception as e: 
+        pyperclip.copy(text)
+        time.sleep(0.3)
+        pyautogui.keyDown(PASTE_KEY)
+        time.sleep(0.1)
+        pyautogui.press('v')
+        time.sleep(0.1)
+        pyautogui.keyUp(PASTE_KEY)
+        return {'success': True}
+    except Exception as e:
         print(f"Type Error: {e}")
-        return {'success': False, 'message': '服务器内部错误'}
-    return {'success': False}
+        return {'success': False, 'message': '服务器内部错误'}, 500
 
 def get_best_lan_ip():
     try:
@@ -503,6 +507,12 @@ class ServerApp:
         self.tip_label = tk.Label(main_frame, text="请确保手机和电脑在同一 Wi-Fi 下", fg="#888", font=("Arial", 8))
         self.tip_label.pack(pady=(5, 0))
 
+        self.perm_label = tk.Label(
+            main_frame,
+            text="首次使用请在 系统设置-隐私与安全性-辅助功能 中允许 AirType",
+            fg="#888", font=("Arial", 8), wraplength=260, justify="center")
+        self.perm_label.pack(pady=(2, 0))
+
     def setup_icon(self):
         try:
             png_path = resource_path('icon.png')
@@ -552,8 +562,7 @@ class ServerApp:
             return
             
         selected_ip = self.ip_var.get()
-        try: port = self.port_var.get()
-        except: port = "9000"
+        port = self.port_var.get()
 
         # [修改] 8. 移除 URL 中的 Token 参数
         # url = f"http://{selected_ip}:{port}/?token={CURRENT_TOKEN}"
